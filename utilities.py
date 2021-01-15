@@ -6,16 +6,56 @@ import os
 import sys
 import time
 from datetime import datetime
-import urllib
+import urllib.request
 import json
+import logging
 import RPi.GPIO as GPIO
 from pathlib import Path
+
+import socket, struct
+
+
+logger = logging.getLogger('HoneyPi.utilities')
 
 honeypiFolder = '/home/pi/HoneyPi'
 scriptsFolder = honeypiFolder + '/rpi-scripts'
 backendFolder = '/var/www/html/backend'
 settingsFile = backendFolder + '/settings.json'
 wittypi_scheduleFile = backendFolder + "/schedule.wpi"
+
+logfile = scriptsFolder + '/error.log'
+
+
+def get_default_gateway_linux():
+    """Read the default gateway directly from /proc."""
+    try:
+        with open("/proc/net/route") as fh:
+            for line in fh:
+                fields = line.strip().split()
+                if fields[1] != '00000000' or not int(fields[3], 16) & 2:
+                    # If not default route or not RTF_GATEWAY, skip it
+                    continue
+
+                return socket.inet_ntoa(struct.pack("<L", int(fields[2], 16)))
+    except Exception as ex:
+        print("get_default_gateway_linux:" + str(ex))
+        pass
+        return None
+
+def get_interface_upstatus_linux(interfacename):
+    """/sys/class/net/'interfacename'/operstate'."""
+    try:
+        with open('/sys/class/net/'+ str(interfacename) + '/operstate') as fh:
+            for line in fh:
+                status= line.strip()
+                if status == "up":
+                    return True
+                else:
+                    return False
+    except Exception as ex:
+        print("get_interface_upstatus_linux:" + str(ex))
+        pass
+        return False
 
 def stop_tv():
     os.system("sudo /usr/bin/tvservice -o")
@@ -203,17 +243,17 @@ def check_file(file, size=5, entries=25, skipFirst=0):
 
 def error_log(e=None, printText=None):
     try:
-        file = scriptsFolder + '/error.log'
+        """file = scriptsFolder + '/error.log'
         check_file(file) # reset file if it gets to big
 
-        # generate printed text
+        # generate printed text"""
         if printText and e:
             printText = printText + " | " + repr(e)
         elif e:
             printText = e
         else:
             printText = "No Text defined."
-
+        """
         print(printText)
 
         dt = datetime.now()
@@ -222,18 +262,40 @@ def error_log(e=None, printText=None):
         # write to file
         with open(file, "a") as myfile:
             myfile.write (str(timestamp) + " | " + printText + "\n")
-
+        """
+        logger.info(printText)
     except Exception:
         pass
 
+def check_undervoltage():
+    try:
+        undervoltage = str(os.popen("sudo vcgencmd get_throttled").readlines())
+        error_log("undervoltagecheck")
+        print(undervoltage)
+
+        if "0x0" in undervoltage:
+            error_log("Info: No undervoltage alarm")
+            print("Unterspannung 0x0 " + undervoltage)
+
+        elif "0x50000" in undervoltage:
+            error_log("Warning: undervoltage alarm had happened since system start ", undervoltage)
+            print("undervoltage " + undervoltage)
+
+        elif "0x50005" in undervoltage:
+            error_log("Warning : undervoltage alarm is currently raised ", undervoltage)
+            print("undervoltage 0x50005 " + undervoltage)
+
+    except Exception as ex:
+        print("Exception in function check_undervoltage:" + str(ex))
+        pass
+    return
 
 def wait_for_internet_connection(maxTime=10):
     i = 0
     while i < maxTime:
         i+=1
         try:
-            response = urllib.request.urlopen('http://www.msftncsi.com/ncsi.txt', timeout=1).read()
-
+            response = str(urllib.request.urlopen('http://www.msftncsi.com/ncsi.txt', timeout=1).read().decode('utf-8'))
             if response == "Microsoft NCSI":
                 print("Success: Connection established after " + str(i) + " seconds.")
                 return True
@@ -242,6 +304,15 @@ def wait_for_internet_connection(maxTime=10):
         finally:
             time.sleep(1)
 
+    return False
+
+def check_internet_connection():
+    try:
+        response = str(urllib.request.urlopen('http://www.msftncsi.com/ncsi.txt', timeout=1).read().decode('utf-8'))
+        if response == "Microsoft NCSI":
+            return True
+    except:
+        print("Except check_internet_connection: Connection error.")
     return False
 
 def delete_settings():

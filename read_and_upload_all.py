@@ -1,10 +1,14 @@
 #!/usr/bin/env python3
 # This file is part of HoneyPi [honey-pi.de] which is released under Creative Commons License Attribution-NonCommercial-ShareAlike 3.0 Unported (CC BY-NC-SA 3.0).
 # See file LICENSE or go to http://creativecommons.org/licenses/by-nc-sa/3.0/ for full license details.
+# Changelog 05.12.2020: New sensors ATH10, SHT31 and HDC1080(1008)
 
 import math
 import threading
 import time
+
+import logging
+
 from pprint import pprint
 from multiprocessing import Process, Queue, Value
 
@@ -16,6 +20,11 @@ from read_pcf8591 import measure_voltage, get_raw_voltage
 from read_bme680 import initBME680FromMain
 from read_ds18b20 import read_unfiltered_temperatur_values, filtered_temperature, checkIfSensorExistsInArray
 from read_hx711 import init_hx711
+
+from read_aht10 import measure_aht10
+from read_sht31 import measure_sht31
+from read_hdc1008 import measure_hdc1008
+
 from read_settings import get_settings, get_sensors
 from utilities import reboot, error_log, shutdown, start_single, stop_single, clean_fields, update_wittypi_schedule, getStateFromStorage, setStateToStorage, blink_led
 from write_csv import write_csv
@@ -35,13 +44,11 @@ def manage_transfer_to_ts(ts_channels, ts_fields, server_url, offline, debug):
 
     return connectionErrorHappened
 
-
-def measure(offline, debug, ts_channels, ts_server_url, filtered_temperature, ds18b20Sensors, bme680Sensors, bme680IsInitialized, dhtSensors, tcSensors, bme280Sensors, voltageSensors, ee895Sensors, weightSensors, hxInits, connectionErrors, measurementIsRunning):
+def measure(offline, debug, ts_channels, ts_server_url, filtered_temperature, ds18b20Sensors, bme680Sensors, bme680IsInitialized, dhtSensors, aht10Sensors, sht31Sensors, hdc1008Sensors, tcSensors, bme280Sensors, voltageSensors, ee895Sensors, weightSensors, hxInits, connectionErrors, measurementIsRunning):
     measurementIsRunning.value = 1 # set flag
     ts_fields = {}
     try:
-        ts_fields = measure_all_sensors(debug, filtered_temperature, ds18b20Sensors, bme680Sensors, bme680IsInitialized, dhtSensors, tcSensors, bme280Sensors, voltageSensors, ee895Sensors, weightSensors, hxInits)
-
+        ts_fields = measure_all_sensors(debug, filtered_temperature, ds18b20Sensors, bme680Sensors, bme680IsInitialized, dhtSensors, aht10Sensors, sht31Sensors, hdc1008Sensors, tcSensors, bme280Sensors, voltageSensors, ee895Sensors, weightSensors, hxInits)
         if len(ts_fields) > 0:
             if offline == 1 or offline == 3:
                 try:
@@ -49,7 +56,7 @@ def measure(offline, debug, ts_channels, ts_server_url, filtered_temperature, ds
                     if s and debug:
                         error_log("Info: Data succesfully saved to CSV-File.")
                 except Exception as ex:
-                    error_log(ex, "Exception in measure")
+                    error_log(ex, "Exception in measure (1)")
 
             # if transfer to thingspeak is set
             if (offline == 0 or offline == 1 or offline == 2) and ts_channels:
@@ -81,7 +88,7 @@ def measure(offline, debug, ts_channels, ts_server_url, filtered_temperature, ds
         measurementIsRunning.value = 0 # clear flag
 
     except Exception as ex:
-        error_log(ex, "Exception during measure")
+        error_log(ex, "Exception during measure (2)")
         measurementIsRunning.value = 0 # clear flag
 
 def check_wittypi_voltage(time_measured_Voltage, wittyPi, voltageSensors, isLowVoltage, interval, shutdownAfterTransfer):
@@ -92,38 +99,41 @@ def check_wittypi_voltage(time_measured_Voltage, wittyPi, voltageSensors, isLowV
         if isTimeToCheckVoltage:
             if voltageSensors and len(voltageSensors) == 1:
                 voltage = get_raw_voltage(voltageSensors[0])
-                now = time.strftime("%H:%M", time.localtime(time_now))
-                print("Voltage Check at " + str(now) + ": " + str(voltage) + " Volt")
-                if voltage <= wittyPi["low"]["voltage"]:
-                    print("Running on low voltage")
-                    if (isLowVoltage == False) or (isLowVoltage is None):
-                        if wittyPi["low"]["enabled"]:
-                            error_log("Info: Enable wittyPi low voltage settings!")
-                            update_wittypi_schedule(wittyPi["low"]["schedule"])
-                        else:
-                            error_log("Info: Low voltage but wittyPi disabled!")
-                            update_wittypi_schedule("")
-                        interval = wittyPi["low"]["interval"]
-                        shutdownAfterTransfer = wittyPi["low"]["shutdownAfterTransfer"]
-                        isLowVoltage = setStateToStorage('isLowVoltage', True)
-                        error_log("Info: New Interval: '" + str(interval) + "', Shutdown after transfer is '" + str(shutdownAfterTransfer)  +"'")
-                elif voltage < wittyPi["normal"]["voltage"]:
-                    print("No longer low voltage but recovery voltage not reached")
-                elif voltage >= wittyPi["normal"]["voltage"]:
-                    print("Running on normal voltage")
-                    if (isLowVoltage == True) or (isLowVoltage is None):
-                        if wittyPi["normal"]["enabled"]:
-                            error_log("Info: Enable wittyPi normal voltage settings!")
-                            update_wittypi_schedule(wittyPi["normal"]["schedule"])
-                        else:
-                            error_log("Info: Normal voltage but wittyPi disabled!")
-                            update_wittypi_schedule("")
-                            interval = wittyPi["normal"]["interval"]
-                            shutdownAfterTransfer = wittyPi["normal"]["shutdownAfterTransfer"]
-                        isLowVoltage = setStateToStorage('isLowVoltage', False)
-                        error_log("Info: New Interval: '" + str(interval) + "', Shutdown after transfer is '" + str(shutdownAfterTransfer)  +"'")
+                if voltage is not None:
+                    now = time.strftime("%H:%M", time.localtime(time_now))
+                    print("Voltage Check at " + str(now) + ": " + str(voltage) + " Volt")
+                    if voltage <= wittyPi["low"]["voltage"]:
+                        print("Running on low voltage")
+                        if (isLowVoltage == False) or (isLowVoltage is None):
+                            if wittyPi["low"]["enabled"]:
+                                error_log("Info: Enable wittyPi low voltage settings!")
+                                update_wittypi_schedule(wittyPi["low"]["schedule"])
+                            else:
+                                error_log("Info: Low voltage but wittyPi disabled!")
+                                update_wittypi_schedule("")
+                            interval = wittyPi["low"]["interval"]
+                            shutdownAfterTransfer = wittyPi["low"]["shutdownAfterTransfer"]
+                            isLowVoltage = setStateToStorage('isLowVoltage', True)
+                            error_log("Info: New Interval: '" + str(interval) + "', Shutdown after transfer is '" + str(shutdownAfterTransfer)  +"'")
+                    elif voltage < wittyPi["normal"]["voltage"]:
+                        print("No longer low voltage but recovery voltage not reached")
+                    elif voltage >= wittyPi["normal"]["voltage"]:
+                        print("Running on normal voltage")
+                        if (isLowVoltage == True) or (isLowVoltage is None):
+                            if wittyPi["normal"]["enabled"]:
+                                error_log("Info: Enable wittyPi normal voltage settings!")
+                                update_wittypi_schedule(wittyPi["normal"]["schedule"])
+                            else:
+                                error_log("Info: Normal voltage but wittyPi disabled!")
+                                update_wittypi_schedule("")
+                                interval = wittyPi["normal"]["interval"]
+                                shutdownAfterTransfer = wittyPi["normal"]["shutdownAfterTransfer"]
+                            isLowVoltage = setStateToStorage('isLowVoltage', False)
+                            error_log("Info: New Interval: '" + str(interval) + "', Shutdown after transfer is '" + str(shutdownAfterTransfer)  +"'")
+                    else:
+                        error_log("Warning: Choosen WittyPi Voltage settings irregular Voltage Normal should be higher than Undervoltage")
                 else:
-                    error_log("Warning: Choosen WittyPi Voltage settings irregular Voltage Normal should be higher than Undervoltage")
+                    error_log("Error: Voltagesensor did not return a value!")
             else:
                 error_log("Warning: WittyPi Voltage checks enabled but no VoltageSensors configured")
                 time_measured_Voltage = time.time()
@@ -140,7 +150,12 @@ def start_measurement(measurement_stop):
         settings = get_settings()
         ts_channels = settings["ts_channels"] # ThingSpeak data (ts_channel_id, ts_write_key)
         ts_server_url = settings["ts_server_url"]
-        debug = settings["debug"] # flag to enable debug mode (HDMI output enabled and no rebooting)
+        debuglevel = settings["debuglevel"]
+        if debuglevel <= 10:
+            debug = True # flag to enable debug mode (HDMI output enabled and no rebooting)
+        else:
+            debug = False # flag to enable debug mode (HDMI output enabled and no rebooting)
+        #debug = settings["debug"] # flag to enable debug mode (HDMI output enabled and no rebooting)
         wittyPi = settings["wittyPi"]
         offline = settings["offline"] # flag to enable offline csv storage
 
@@ -174,13 +189,16 @@ def start_measurement(measurement_stop):
         bme280Sensors = get_sensors(settings, 5)
         voltageSensors = get_sensors(settings, 6)
         ee895Sensors = get_sensors(settings, 7)
+        aht10Sensors = get_sensors(settings, 8)
+        sht31Sensors = get_sensors(settings, 9)
+        hdc1008Sensors = get_sensors(settings, 10)
+        bme680IsInitialized = {}
 
         # -- Run Pre Configuration --
         # if bme680 is configured
-        if bme680Sensors and len(bme680Sensors) == 1:
-            bme680IsInitialized = initBME680FromMain(bme680Sensors)
-        else:
-            bme680IsInitialized = 0
+        for (sensorIndex, bme680Sensor) in enumerate(bme680Sensors):
+            bme680IsInitialized[sensorIndex] = 0
+            bme680IsInitialized[sensorIndex] = initBME680FromMain(bme680Sensor)
 
         # if hx711 is set
         hxInits = []
@@ -190,7 +208,7 @@ def start_measurement(measurement_stop):
 
         # PCF8591
         if voltageSensors and len(voltageSensors) == 1:
-            voltage = get_raw_voltage(voltageSensors[0]) #initial measurement as first measurement is always wrong
+            voltage = get_raw_voltage(voltageSensors[0]) # initial measurement as first measurement is always wrong
 
         # -- End Pre Configuration --
 
@@ -226,7 +244,7 @@ def start_measurement(measurement_stop):
 
                 if measurementIsRunning.value == 0:
                     q = Queue()
-                    p = Process(target=measure, args=(offline, debug, ts_channels, ts_server_url, filtered_temperature, ds18b20Sensors, bme680Sensors, bme680IsInitialized, dhtSensors, tcSensors, bme280Sensors, voltageSensors, ee895Sensors, weightSensors, hxInits, connectionErrors, measurementIsRunning))
+                    p = Process(target=measure, args=(offline, debug, ts_channels, ts_server_url, filtered_temperature, ds18b20Sensors, bme680Sensors, bme680IsInitialized, dhtSensors, aht10Sensors, sht31Sensors, hdc1008Sensors, tcSensors, bme280Sensors, voltageSensors, ee895Sensors, weightSensors, hxInits, connectionErrors, measurementIsRunning))
                     p.start()
                     p.join()
                 else:
@@ -259,7 +277,7 @@ def start_measurement(measurement_stop):
         print("Measurement-Script runtime was " + str(time_taken_s) + " seconds.")
 
     except Exception as e:
-        error_log(e, "Unhandled Exception while Measurement")
+        error_log(e, "Unhandled Exception in start_measurement")
         if not debug:
             time.sleep(10)
             reboot()

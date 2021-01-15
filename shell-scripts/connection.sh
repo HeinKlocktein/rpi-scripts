@@ -48,7 +48,7 @@ kill_old_wvdial () {
 
 start_wvdial () {
 	# Check if modem is connected (/dev/ttyUSB0 does exist)
-	if ls -la /dev/ttyUSB0 2>/dev/null; then
+	if ls -la /dev/$ttyUSB 2>/dev/null; then
 		# Check if wvdial process is running
 		if ! ps -C wvdial
 				then
@@ -87,7 +87,15 @@ elif [ "$1" = "set-apn" ] ; then
         APN="$2"
     fi
 
+	if [ -z "$3" ] ; then
+    	echo "Warning: Missing argument ttyUSB."
+        ttyUSB="ttyUSB0" # default: ttyUSB0
+    else
+        ttyUSB="$3"
+    fi
+
     export APN
+	export ttyUSB
     # Create the config for wvdial
     cat /etc/wvdial.conf.tmpl | envsubst > /etc/wvdial.conf
 else

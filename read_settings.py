@@ -15,20 +15,24 @@ def get_defaults():
     settings["button_pin"] = 16
     settings["led_pin"] = 21
     settings["w1gpio"] = 11
-    # settings["interval"] = 0
-    settings["debug"] = True
+    settings["debuglevel"] = 10
     settings["offline"] = 0
-    # settings["shutdownAfterTransfer"] = False
     router = {}
     router['enabled'] = False
     router['ssid'] = None
     router['password'] = None
+    router['wpa_type'] = 0
+    modem = {}
+    modem['enabled'] = False
+    modem['ttyUSB'] = "ttyUSB0"
+    modem['apn'] = "pinternet.interkom.de"
     honeypi = {}
     honeypi['ssid'] = "HoneyPi"
     honeypi['password'] = "HoneyPi!"
     internet = {}
     internet['router'] = router
     internet['honeypi'] = honeypi
+    internet['modem'] = modem
     settings["internet"] = internet
     settings['ts_server_url'] = "https://api.thingspeak.com"
     settings["ts_channels"] = []
@@ -37,9 +41,10 @@ def get_defaults():
     ts_channel['ts_write_key'] = None
     settings["ts_channels"].append(ts_channel)
     settings["sensors"] = []
-    settings["wittyPi_enabled"] = False #To be removed once Webinterface is updated
     wittyPi = {}
     wittyPi["enabled"] = False
+    wittyPi["version"] = 2
+    wittyPi["dummyload"] = 15
     wittyPi["voltagecheck_enabled"] = False
     lowVoltage = {}
     lowVoltage["enabled"] = False
@@ -53,7 +58,7 @@ def get_defaults():
     normalVoltage["schedule"] = "BEGIN 2015-08-01 00:00:00 \nEND   2025-07-31 23:59:59 \nON   M5 WAIT\nOFF   M10"
     normalVoltage["voltage"] = 12.8
     normalVoltage["shutdownAfterTransfer"] = False
-    normalVoltage["interval"] = 0
+    normalVoltage["interval"] = 600
     wittyPi["normal"] = normalVoltage
     settings['wittyPi'] = wittyPi
 
@@ -113,10 +118,21 @@ def validate_settings(settings):
         updateSettingsFile = True
 
     try:
-        settings["debug"]
+        settings["debuglevel"]
     except:
-        settings["debug"] = get_defaults()["debug"]
-        updateSettingsFile = True
+        # Migrate debug to debuglevel
+        try:
+            settings["debug"]
+            if settings["debug"]:
+                settings["debuglevel"] = 10
+            else:
+                settings["debuglevel"] = get_defaults()["debuglevel"]
+            updateSettingsFile = True
+            #settings.remove("debug")
+                
+        except:
+            settings["debuglevel"] = get_defaults()["debuglevel"]
+            updateSettingsFile = True
 
     try:
         settings["offline"]
@@ -129,6 +145,13 @@ def validate_settings(settings):
         settings["ts_server_url"]
     except:
         settings["ts_server_url"] = get_defaults()["ts_server_url"]
+        updateSettingsFile = True
+
+    # Migrate from v1.0.8-beta
+    try:
+        settings["internet"]["modem"]
+    except:
+        settings["internet"]["modem"] = get_defaults()["internet"]["modem"]
         updateSettingsFile = True
 
     # Migrate v0.1.1 to v1.0 (Multi-Channel)
